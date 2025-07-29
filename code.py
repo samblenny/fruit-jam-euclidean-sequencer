@@ -53,7 +53,7 @@ LINE_LEVEL  = const(True)
 #==============================================================
 
 # Change this to True if you want more MIDI output on the serial console
-DEBUG = const(False)
+DEBUG = const(True)
 
 
 def init_display(width, height, color_depth):
@@ -154,6 +154,10 @@ def elapsed_ms(t1, t2):
     # "integer overflow", and "two's complement" arithmetic.
     return (t2 - t1) & 0x3fffffff
 
+def key_change(num, up):
+    # Handle note on event (up==True) or note off event (up==False)
+    pass
+
 def main():
 
     # Configure display with requested picodvi video mode
@@ -175,6 +179,7 @@ def main():
     sleep = time.sleep
     ticks_ms = supervisor.ticks_ms
     diff_ms = elapsed_ms
+    key = key_change
 
     # Main loop: scan USB host bus for MIDI device, connect, start event loop.
     # This grabs the first MIDI device it finds. Reset board to re-scan bus.
@@ -200,15 +205,33 @@ def main():
             device_cache = {}
             gc.collect()
             # MIDI Event Input Loop: Poll for input until USB error.
+            #
             # CAUTION: This loop needs to be as efficient as possible. Any
             # extra work here directly adds time to USB latency.
+            #
+            # This uses the input event generator to prepare an iterator object
+            # that we can poll inside the while loop. There's an easier syntax
+            # to use this with a for loop, but here we need to de-prioritize
+            # USB IO a little in order to share resources with synthio,
+            # picodvi, and the sequencer timing loop.
+            #
+            event_it = dev.input_event_generator()
+            if event_it is None:
+                continue
             cin = chan = num = val = 0x00
-            # Take initial timestamp for making elapsed time calculations
-            t1 = ticks_ms()
-            for data in dev.input_event_generator():
-                # Begin handling midi packet which should be None or a 4-byte
-                # memoryview.
-                if data is None:
+            t1_dvi = t2 = ticks_ms()
+            while True:
+                # Calculate elapsed time since last loop iteration and use that
+                # to limit the rate screen refreshes and USB polling
+                t2 = ticks_ms()
+                if diff_ms(t1_dvi, t2) > 30:
+                    # Refresh the display
+                    t1_dvi = t2
+                    refresh()
+
+                # Poll for a USB MIDI event and begin handling midi packet. The
+                # packet (data) should be None or a 4-byte memoryview.
+                if (data := next(event_it)) is None:
                     continue
 
                 # data[0] has CN (Cable Number) and CIN (Code Index Number). By
@@ -234,9 +257,11 @@ def main():
                 if cin == 0x08 and (21 <= num <= 108):
                     # Note off
                     release(num)
+                    key(num, False)
                 elif cin == 0x09 and (21 <= num <= 108):
                     # Note on
                     press(num)
+                    key(num, True)
                 elif cin == 0x0b and num == 123 and val == 0:
                     # CC 123 means stop all notes ("panic")
                     panic()
@@ -258,16 +283,12 @@ def main():
                         # CP channel key pressure (aftertouch)
                         fast_wr('CP  %d %d %d\n' % (chan, num, val))
                     elif cin == 0x0e:
-                        # PB pitch bend
-                        fast_wr('PB  %d %d %d\n' % (chan, num, val))
+                        # PB pitch bend (this can be noisy with a K-Board C)
+                        pass
+                        #fast_wr('PB  %d %d %d\n' % (chan, num, val))
                     else:
                         # Ignore the rest: SysEx, System Realtime, or whatever
                         pass
-                # Use elapsed time calculation to limit screen refresh rate
-                t2 = ticks_ms()
-                if diff_ms(t1, t2) > 30:
-                    t1 = t2
-                    refresh()
         except USBError as e:
             # This sometimes happens when devices are unplugged. Not always.
             print("USBError: '%s' (device unplugged?)" % e)
