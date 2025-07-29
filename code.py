@@ -41,9 +41,9 @@ from sb_usb_midi import find_usb_device, MIDIInputDevice
 
 
 # DAC and Synthesis parameters
-SAMPLE_RATE = const(11025)
-CHAN_COUNT  = const(2)
-BUFFER_SIZE = const(1024)
+SAMPLE_RATE = const(22050)
+CHAN_COUNT  = const(1)
+BUFFER_SIZE = const(512)
 #==============================================================
 # CAUTION! When this is set to True, the headphone jack will
 # send a line-level output suitable use with a mixer or powered
@@ -135,8 +135,8 @@ def init_dac_audio_synth(i2c):
         audio = I2SOut(bit_clock=I2S_BCLK, word_select=I2S_WS, data=I2S_DIN)
     # 5. Configure synthio patch to generate audio
     vca = synthio.Envelope(
-        attack_time=0.002, decay_time=0.01, sustain_level=0.4,
-        release_time=0, attack_level=0.6
+        attack_time=0.005, decay_time=0.005, sustain_level=0.3,
+        release_time=0.001, attack_level=0.4
     )
     synth = synthio.Synthesizer(
         sample_rate=SAMPLE_RATE, channel_count=CHAN_COUNT, envelope=vca
@@ -221,8 +221,8 @@ def main():
             cin = chan = num = val = 0x00
             t1_dvi = t2 = ticks_ms()
             while True:
-                # Calculate elapsed time since last loop iteration and use that
-                # to limit the rate screen refreshes and USB polling
+                # Use elapsed time interval to limit display refresh rate and
+                # regulate sequencer event triggers
                 t2 = ticks_ms()
                 if diff_ms(t1_dvi, t2) > 30:
                     # Refresh the display
@@ -230,7 +230,8 @@ def main():
                     refresh()
 
                 # Poll for a USB MIDI event and begin handling midi packet. The
-                # packet (data) should be None or a 4-byte memoryview.
+                # packet (data) should be None or a 4-byte memoryview. The :=
+                # syntax is Python's "Walrus operator".
                 if (data := next(event_it)) is None:
                     continue
 
