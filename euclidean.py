@@ -49,7 +49,7 @@ def gen_rhythm(beats, hits, shift=0, debug=False):
             for i in range(len2):
                 group1[i] = group1[i] + group2[i]
             # Suppose group1 has ['x..', 'x..', 'x.'] at this point. The slices
-            # below would set group1 to ['x...', 'x..'] and group2 to ['x.'].
+            # below would set group1 to ['x..', 'x..'] and group2 to ['x.'].
             group2 = group1[len2:]
             group1 = group1[:len2]
             return recurse(group1, group2)
