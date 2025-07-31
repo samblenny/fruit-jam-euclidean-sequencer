@@ -56,7 +56,7 @@ def gen_rhythm(beats, hits, shift=0, debug=False):
         else:
             # Recursive Case: group2 is longer, so there will be a remainder
             # after we move one group2 item to the end of each group1 item. To
-            # handle leftover rests, we call this function again.
+            # handle leftover group2 items, we call this function again.
             for i in range(len1):
                 group1[i] = group1[i] + group2[i]
             group2 = group2[len1:]
