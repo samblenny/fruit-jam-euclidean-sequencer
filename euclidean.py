@@ -29,8 +29,11 @@ def gen_rhythm(beats, hits, shift=0, debug=False):
         len2 = len(group2)
         if debug:
             print(' %s  %s' % (group1, group2))
-        if len2 == 0:
-            # Base Case: group2 was initially empty
+        if len1 == 0:
+            # Base Case: group1 was initially empty (no hits)
+            return ''.join(group2)
+        elif len2 == 0:
+            # Base Case: group2 was initially empty (no rests)
             return ''.join(group1)
         elif len2 == len1:
             # Base Case: group lengths match, so each group2 item can be moved

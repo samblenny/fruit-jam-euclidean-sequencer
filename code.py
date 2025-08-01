@@ -65,6 +65,13 @@ WHITE   = const(0xF8FCF8)
 GREEN   = const(0x58FC58)
 BLACK   = const(0x000000)
 
+# MIDI CC Knob Assignments
+# Defaults are for the Set 4 knobs on a BeatStep Pro
+CC_BEATS = const(17)   # BSP Control Mode : Set 4 : Knob 13
+CC_HITS  = const(91)   # BSP Control Mode : Set 4 : Knob 14
+CC_SHIFT = const(79)   # BSP Control Mode : Set 4 : Knob 15
+CC_BPM   = const(72)   # BSP Control Mode : Set 4 : Knob 16
+
 
 def init_display(width, height, color_depth):
     # Initialize the picodvi display
@@ -201,10 +208,10 @@ class RhythmRing:
         self.cx = cx          # ring center coordinate X value
         self.cy = cy          # ring center coordinate Y value
         self.radius = radius  # ring radius
-        self.beats = beats
-        self.hits  = hits
-        self.shift = shift
-        self.bpm   = bpm
+        self._beats = max(1, min(16, beats))
+        self._hits  = max(0, min(self._beats, hits))
+        self._shift = max(0, min(self._beats, shift))
+        self._bpm   = max(30, min(300, bpm))
         self.palette = palette  # displayio.Palette used by bitmap
         self.bg      = bg       #  index into palette
         self.fg      = fg       #  index into palette
@@ -227,15 +234,49 @@ class RhythmRing:
         self.hit_bmp = hit
         self.rest_bmp = rest
 
-    def adjust(self, beats=0, hits=0, shift=0):
-        # Adjust current Euclidean rhythm parameters and regenerate rhythm.
-        # Beats value gets clipped to minimum of 1, maximum of 16.
-        # Hits  value gets clipped to minimum of 1, maximum of self.beats.
-        # Shift value gets clipped to minimum of 1, maximum of self.beats.
-        self.beats  = max(1, min(16, self.beats + dbeats))
-        self.hits   = max(1, min(self.beats, self.hits + dhits))
-        self.shift  = max(0, min(self.beats, self.shift + dshift))
-        self.rhythm = gen_rhythm(self.beats, self.hits, self.shift)
+    @property
+    def beats(self):
+        return self._beats
+
+    @beats.setter
+    def beats(self, value):
+        # Set new beats value, then regenerate the rhythm.
+        # Beats value gets clipped to range 1..16.
+        self._beats = b = max(1, min(16, value))
+        self.rhythm = gen_rhythm(b, min(b, self._hits), min(b, self._shift))
+
+    @property
+    def hits(self):
+        return self._hits
+
+    @hits.setter
+    def hits(self, value):
+        # Set new hits value, then regenerate the rhythm.
+        # Hits value gets clipped to range 0..(self.beats).
+        b = self._beats
+        self._hits = h = max(0, min(b, value))
+        self.rhythm = gen_rhythm(b, h, min(b, self._shift))
+
+    @property
+    def shift(self):
+        return self._shift
+
+    @shift.setter
+    def shift(self, value):
+        # Set new shift value, then regenerate the rhythm.
+        # Shift value gets clipped to range 0..(self.beats).
+        b = self._beats
+        self._shift = s = max(0, min(b, value))
+        self.rhythm = gen_rhythm(b, self._hits, s)
+
+    @property
+    def bpm(self):
+        return self._bpm
+
+    @bpm.setter
+    def bpm(self, value):
+        # Set new BPM value with clipping to fit in range 30..300.
+        self._bpm = max(30, min(300, value))
 
     def refresh(self):
         # Draw the background ring as a thick-stroked circle
@@ -264,6 +305,7 @@ def main():
 
     # Configure display with requested picodvi video mode
     display = init_display(320, 240, 16)
+    display.auto_refresh = False
     grp = Group(scale=1)
     display.root_group = grp
 
@@ -279,7 +321,7 @@ def main():
     grp.append(TileGrid(bitmap, pixel_shader=pal))
 
     # Prepare RhythmRing visualizer instance
-    ring = RhythmRing(bitmap, cx=110, cy=display.height//2, radius=65,
+    ring = RhythmRing(bitmap, cx=110, cy=display.height//2, radius=75,
         beats=8, hits=5, shift=0, bpm=80,
         palette=pal, bg=0, fg=1, hilite=2, alpha=3
     )
@@ -293,6 +335,7 @@ def main():
     fast_wr = sys.stdout.write
     panic = synth.release_all
     press = synth.press
+    refresh = display.refresh
     release = synth.release
     sleep = time.sleep
     ticks_ms = supervisor.ticks_ms
@@ -303,6 +346,7 @@ def main():
     # This grabs the first MIDI device it finds. Reset board to re-scan bus.
     while True:
         fast_wr("USB Host: scanning bus...\n")
+        refresh()
         gc.collect()
         device_cache = {}
         try:
@@ -317,6 +361,7 @@ def main():
             # and trigger another iteration through the outer while True loop.
             dev = MIDIInputDevice(r)
             fast_wr(" found MIDI device vid:pid %04X:%04X\n" % (r.vid, r.pid))
+            refresh()
             # Collect garbage to hopefully limit heap fragmentation.
             r = None
             device_cache = {}
@@ -338,11 +383,11 @@ def main():
             cin = chan = num = val = 0x00
             t1 = t2 = ticks_ms()
             while True:
-                # Use elapsed time interval to regulate sequencer timing
+                # Use elapsed time to regulate display and sequencer timing
                 t2 = ticks_ms()
                 if diff_ms(t1, t2) > 30:
-                    # TODO: implement this
-                    pass
+                    t1 = t2
+                    refresh()
 
                 # Poll for a USB MIDI event and begin handling midi packet. The
                 # packet (data) should be None or a 4-byte memoryview. The :=
@@ -370,18 +415,23 @@ def main():
                 # stuff is slow, and we want to go _fast_. For details about
                 # the MIDI 1.0 standard, see https://midi.org/specs
                 #
-                if cin == 0x08 and (21 <= num <= 108):
-                    # Note off
-                    release(num)
-                    key(num, False)
-                elif cin == 0x09 and (21 <= num <= 108):
-                    # Note on
-                    press(num)
-                    key(num, True)
-                elif cin == 0x0b and num == 123 and val == 0:
-                    # CC 123 means stop all notes ("panic")
-                    panic()
-                    fast_wr('PANIC %d %d %d\n' % (chan, num, val))
+                if cin == 0x0b:
+                    # This is for a CC (Control Change) message on any channel
+                    if num == 123 and val == 0:
+                        # CC 123 means stop all notes ("panic")
+                        panic()
+                        fast_wr('PANIC %d %d %d\n' % (chan, num, val))
+                    elif num == CC_BEATS:
+                        ring.beats = val
+                        ring.refresh()
+                    elif num == CC_HITS:
+                        ring.hits = val
+                        ring.refresh()
+                    elif num == CC_SHIFT:
+                        ring.shift = val
+                        ring.refresh()
+                    elif num == CC_BPM:
+                        ring.bpm = 30 + (val * 2)  # scale 0..127 to 30..284
                 if DEBUG:
                     if cin == 0x08:
                         # Note On

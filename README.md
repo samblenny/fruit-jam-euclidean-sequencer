@@ -8,9 +8,9 @@
 (*screenshot of work in progress on rhythm visualizer*)
 
 This is a Euclidean rhythm sequencer for CircuitPython with graphical display
-and control input from a USB MIDI keyboard controller. Rather than using the
-keyboard keys to play notes in the usual way, this code uses the keys as
-buttons to control sequencer settings.
+and control input from a USB MIDI controller. The code listens for MIDI CC
+(Control Change) messages on the USB host port to control the beats, hits,
+shift, and bpm for the rhythm generator.
 
 This code was developed and tested on CircuitPython 10.0.0-beta.0 with a
 pre-release rev B Fruit Jam prototype which uses a different I2S pinout from
@@ -21,23 +21,11 @@ of the Fruit Jam board becomes available in the shop.
 
 ## Suitable MIDI Controllers
 
-This code is meant to work with one of the commonly available compact two
-octave (25-key) USB MIDI keyboard controllers. Larger keyboard controllers
-should also work fine. For discussion of the pros and cons of various
-controllers, you can check forums like reddit or modwiggler.
-
-Based on my reading of forums, reviews, and manufacturer websites, I made the
-list below with some controllers that might be suitable. I've only tried a
-couple of these, but I've seen people online say that they like them (others
-disagree). Keep in mind that 25 key keyboards have some inherent limitations,
-caveat emptor, etc. Anyhow, in alphabetical order...
-
-- Arturia MicroLab mk3
-- Korg MicroKEY-25
-- Korg NanoKEY2
-- Korg NanoKEY Fold
-- Korg NanoPAD2
-- Muse Kinetics (Keith McMillen) K-Board C
+You need a USB MIDI controller that can send four different MIDI CC values from
+knobs, sliders, or whatever. I wrote and tested this with an Arturia BeatStep
+Pro, but many other commercial or DIY controllers would work. The configuration
+section at the top of code.py has four constants (CC_...) that you can set to
+adjust the MIDI control number assignments.
 
 
 ## Board Revision Note
