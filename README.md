@@ -4,6 +4,9 @@
 
 **DRAFT: WORK IN PROGRESS**
 
+![screenshot of rhythm visualizer](wip-screenshot.png)
+(*screenshot of work in progress on rhythm visualizer*)
+
 This is a Euclidean rhythm sequencer for CircuitPython with graphical display
 and control input from a USB MIDI keyboard controller. Rather than using the
 keyboard keys to play notes in the usual way, this code uses the keys as
