@@ -61,8 +61,8 @@ DEBUG = const(True)
 
 # Color Theme (16-bit RGB565 colors for RP2350 which zero fills low bits)
 CYANISH = const(0x00A8C0)
-GREEN   = const(0x00FC00)
 WHITE   = const(0xF8FCF8)
+GREEN   = const(0x58FC58)
 BLACK   = const(0x000000)
 
 
@@ -168,44 +168,64 @@ def key_change(num, up):
     # Handle note on event (up==True) or note off event (up==False)
     pass
 
-def thick_circle(bitmap, x, y, radius, value, stroke_px, fill=None):
+def circle(bitmap, x, y, radius, stroke, width, fill=None):
     # Draw circle with a thick stroke line by filling the space between two
     # 1px stroke bitmaptools.draw_circle() circles.
     # - bitmap: destination displayio.Bitmap object
-    # - x, y, radius, value: same meaning as for bitmaptools.draw_circle()
-    # - stroke_px: thickness of stroke in pixels (should be 3 or more)
+    # - x, y, radius: same meaning as for bitmaptools.draw_circle()
+    # - stroke: stroke color palette index
+    # - width: stroke width in pixels (should be 3 or more)
     # - fill: optional palette index for interior fill color
     #
     radius = max(5, radius)
-    stroke_px = max(3, stroke_px)
-    inner_radius = radius - (stroke_px // 2)
-    outer_radius = inner_radius + stroke_px
+    width = max(3, width)
+    inner_radius = radius - (width // 2)
+    outer_radius = inner_radius + width
     fill_x = x + radius
-    bitmaptools.draw_circle(bitmap, x, y, inner_radius, value)
-    bitmaptools.draw_circle(bitmap, x, y, outer_radius, value)
-    bitmaptools.boundary_fill(bitmap, fill_x, y, value)
+    # Draw two concentric rings then fill between them
+    bitmaptools.draw_circle(bitmap, x, y, inner_radius, stroke)
+    bitmaptools.draw_circle(bitmap, x, y, outer_radius, stroke)
+    bitmaptools.boundary_fill(bitmap, fill_x, y, stroke)
     if fill is not None:
         # Optionally fill interior of circle
         bitmaptools.boundary_fill(bitmap, x, y, fill)
 
 class RhythmRing:
     # RythmRing maintains a set of Euclidean rhythm parameters, generates a
-    # rhythm pattern when the parameters change, and helps with drawing the
-    # rhythm ring visualizer.
+    # rhythm pattern when needed, and draws the rhythm visualizer.
     def __init__(
-        self, bg, fg, cx, cy, radius,
-        beats=8, hits=5, shift=0, bpm=80
+        self, bitmap, cx, cy, radius, beats, hits, shift, bpm,
+        palette, bg, fg, hilite, alpha
     ):
-        self.bg = bg          # background bitmap
-        self.fg = fg          # foreground bitmap
+        self.bitmap = bitmap  # drawing canvas (displayio.Bitmap)
         self.cx = cx          # ring center coordinate X value
         self.cy = cy          # ring center coordinate Y value
         self.radius = radius  # ring radius
-        self.beats = 8
-        self.hits = 5
-        self.shift = 0
-        self.bpm = 80
+        self.beats = beats
+        self.hits  = hits
+        self.shift = shift
+        self.bpm   = bpm
+        self.palette = palette  # displayio.Palette used by bitmap
+        self.bg      = bg       #  index into palette
+        self.fg      = fg       #  index into palette
+        self.hilite  = hilite   #  index into palette
+        self.alpha   = alpha    #  index into palette
         self.rhythm = gen_rhythm(beats, hits, shift)
+        self._init_dot_bitmaps()
+
+    def _init_dot_bitmaps(self):
+        # Make bitmaps for hit and rest dots to blit with alpha blending later
+        size = 32
+        hit = Bitmap(32, 32, len(self.palette))
+        rest = Bitmap(32, 32, len(self.palette))
+        x = y = size // 2
+        (bg, fg, hilite, alpha) = (self.bg, self.fg, self.hilite, self.alpha)
+        hit.fill(alpha)
+        rest.fill(alpha)
+        circle(hit,  x, y, radius=10, stroke=bg, width=3, fill=hilite)
+        circle(rest, x, y, radius=8,  stroke=bg, width=4, fill=fg)
+        self.hit_bmp = hit
+        self.rest_bmp = rest
 
     def adjust(self, beats=0, hits=0, shift=0):
         # Adjust current Euclidean rhythm parameters and regenerate rhythm.
@@ -217,32 +237,27 @@ class RhythmRing:
         self.shift  = max(0, min(self.beats, self.shift + dshift))
         self.rhythm = gen_rhythm(self.beats, self.hits, self.shift)
 
-    def draw_ring(self, bg_color=0, stroke_color=1):
+    def refresh(self):
         # Draw the background ring as a thick-stroked circle
-        self.bg.fill(bg_color)
-        thick_circle(self.bg, self.cx, self.cy, self.radius,
-            value=stroke_color, stroke_px=3)
-
-    def draw_dots(self, stroke_color, hit_fill, rest_fill, transparent):
-        # Draw dots on top of the background ring to mark the rhythm.
-        # This uses alpha blending and stroke/fill colors to separate the dots
-        # from the background ring.
-        # - stroke_color: palette index of stroke color
-        # - hit_fill: palette index for hit dot fill color
-        # - hit_fill: palette index for rest dot fill color
-        # - transparent: palette index for transparent areas
-        self.fg.fill(transparent)
+        bmp = self.bitmap
+        (bg, fg, hilite, alpha) = (self.bg, self.fg, self.hilite, self.alpha)
+        (cx, cy, r) = (self.cx, self.cy, self.radius)
+        bmp.fill(bg)
+        circle(bmp, cx, cy, r, stroke=fg, width=3)
+        # Draw dots on top of the background ring to mark the rhythm
         rhythm = self.rhythm
+        blit = bitmaptools.blit
+        hit = self.hit_bmp
+        rest = self.rest_bmp
+        offset = hit.width // 2
         for i in range(len(rhythm)):
             angle = math.radians(360 * i / len(rhythm))
-            x = round(self.cx + ((self.radius + 0.5) * math.cos(angle)))
-            y = round(self.cy + ((self.radius + 0.5) * math.sin(angle)))
+            x = round(cx + ((r + 0.5) * math.cos(angle))) - offset
+            y = round(cy + ((r + 0.5) * math.sin(angle))) - offset
             if rhythm[i] == 'x':
-                thick_circle(self.fg, x, y, radius=10,
-                    value=stroke_color, stroke_px=3, fill=hit_fill)
+                blit(bmp, hit, x, y, skip_source_index=alpha)
             else:
-                thick_circle(self.fg, x, y, radius=8,
-                    value=stroke_color, stroke_px=4, fill=rest_fill)
+                blit(bmp, rest, x, y, skip_source_index=alpha)
 
 
 def main():
@@ -252,30 +267,23 @@ def main():
     grp = Group(scale=1)
     display.root_group = grp
 
-    # Make background bitmap and palette (solid color and concentric rings)
-    bg_pal = Palette(2)
-    bg_pal[0] = CYANISH
-    bg_pal[1] = WHITE
-    bg = Bitmap(display.width, display.height, len(bg_pal))
-    bg_tg = TileGrid(bg, pixel_shader=bg_pal)
-    grp.append(bg_tg)
+    # Define theme colors
+    pal = Palette(4)
+    pal[0] = CYANISH  # background (bg)
+    pal[1] = WHITE    # foreground (fg)
+    pal[2] = GREEN    # hilite
+    pal[3] = BLACK    # used as transparent (alpha) with bitmaptools.blit()
 
-    # Make foreground bitmap and palette (dots for beats)
-    fg_pal = Palette(4)
-    fg_pal[0] = BLACK   # this gets set to transparent below
-    fg_pal[1] = WHITE
-    fg_pal[2] = CYANISH
-    fg_pal[3] = GREEN
-    fg_pal.make_transparent(0)
-    fg = Bitmap(display.width, display.height, len(fg_pal))
-    fg_tg = TileGrid(fg, pixel_shader=fg_pal)
-    grp.append(fg_tg)
+    # Prepare drawing canvas with Bitmap and TileGrid
+    bitmap = Bitmap(display.width, display.height, len(pal))
+    grp.append(TileGrid(bitmap, pixel_shader=pal))
 
-    ring = RhythmRing(bg, fg, cx=110, cy=display.height//2, radius=65,
-        beats=8, hits=5, shift=0, bpm=80
+    # Prepare RhythmRing visualizer instance
+    ring = RhythmRing(bitmap, cx=110, cy=display.height//2, radius=65,
+        beats=8, hits=5, shift=0, bpm=80,
+        palette=pal, bg=0, fg=1, hilite=2, alpha=3
     )
-    ring.draw_ring(bg_color=0, stroke_color=1)
-    ring.draw_dots(stroke_color=2, hit_fill=3, rest_fill=1, transparent=0)
+    ring.refresh()
 
     # Set up the audio stuff for a basic synthesizer
     i2c = I2C()
