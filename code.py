@@ -9,6 +9,8 @@
 # - https://docs.circuitpython.org/en/latest/shared-bindings/audiomixer/
 # - https://midi.org/specs
 # - https://github.com/todbot/circuitpython-synthio-tricks
+# - https://docs.circuitpython.org/en/latest/shared-bindings/bitmaptools/
+# - https://docs.circuitpython.org/en/latest/shared-bindings/displayio/
 #
 from audiobusio import I2SOut
 from board import (
@@ -21,6 +23,7 @@ from digitalio import DigitalInOut, Direction, Pull
 from displayio import Bitmap, Group, Palette, TileGrid
 import framebufferio
 import gc
+import math
 from micropython import const
 import os
 import picodvi
@@ -37,6 +40,7 @@ from adafruit_display_text import bitmap_label
 import adafruit_imageload
 from adafruit_tlv320 import TLV320DAC3100
 
+from euclidean import gen_rhythm
 from sb_usb_midi import find_usb_device, MIDIInputDevice
 
 
@@ -54,6 +58,12 @@ LINE_LEVEL  = const(True)
 
 # Change this to True if you want more MIDI output on the serial console
 DEBUG = const(True)
+
+# Color Theme (16-bit RGB565 colors for RP2350 which zero fills low bits)
+CYANISH = const(0x00A8C0)
+GREEN   = const(0x00FC00)
+WHITE   = const(0xF8FCF8)
+BLACK   = const(0x000000)
 
 
 def init_display(width, height, color_depth):
@@ -158,13 +168,114 @@ def key_change(num, up):
     # Handle note on event (up==True) or note off event (up==False)
     pass
 
+def thick_circle(bitmap, x, y, radius, value, stroke_px, fill=None):
+    # Draw circle with a thick stroke line by filling the space between two
+    # 1px stroke bitmaptools.draw_circle() circles.
+    # - bitmap: destination displayio.Bitmap object
+    # - x, y, radius, value: same meaning as for bitmaptools.draw_circle()
+    # - stroke_px: thickness of stroke in pixels (should be 3 or more)
+    # - fill: optional palette index for interior fill color
+    #
+    radius = max(5, radius)
+    stroke_px = max(3, stroke_px)
+    inner_radius = radius - (stroke_px // 2)
+    outer_radius = inner_radius + stroke_px
+    fill_x = x + radius
+    bitmaptools.draw_circle(bitmap, x, y, inner_radius, value)
+    bitmaptools.draw_circle(bitmap, x, y, outer_radius, value)
+    bitmaptools.boundary_fill(bitmap, fill_x, y, value)
+    if fill is not None:
+        # Optionally fill interior of circle
+        bitmaptools.boundary_fill(bitmap, x, y, fill)
+
+class RhythmRing:
+    # RythmRing maintains a set of Euclidean rhythm parameters, generates a
+    # rhythm pattern when the parameters change, and helps with drawing the
+    # rhythm ring visualizer.
+    def __init__(
+        self, bg, fg, cx, cy, radius,
+        beats=8, hits=5, shift=0, bpm=80
+    ):
+        self.bg = bg          # background bitmap
+        self.fg = fg          # foreground bitmap
+        self.cx = cx          # ring center coordinate X value
+        self.cy = cy          # ring center coordinate Y value
+        self.radius = radius  # ring radius
+        self.beats = 8
+        self.hits = 5
+        self.shift = 0
+        self.bpm = 80
+        self.rhythm = gen_rhythm(beats, hits, shift)
+
+    def adjust(self, beats=0, hits=0, shift=0):
+        # Adjust current Euclidean rhythm parameters and regenerate rhythm.
+        # Beats value gets clipped to minimum of 1, maximum of 16.
+        # Hits  value gets clipped to minimum of 1, maximum of self.beats.
+        # Shift value gets clipped to minimum of 1, maximum of self.beats.
+        self.beats  = max(1, min(16, self.beats + dbeats))
+        self.hits   = max(1, min(self.beats, self.hits + dhits))
+        self.shift  = max(0, min(self.beats, self.shift + dshift))
+        self.rhythm = gen_rhythm(self.beats, self.hits, self.shift)
+
+    def draw_ring(self, bg_color=0, stroke_color=1):
+        # Draw the background ring as a thick-stroked circle
+        self.bg.fill(bg_color)
+        thick_circle(self.bg, self.cx, self.cy, self.radius,
+            value=stroke_color, stroke_px=3)
+
+    def draw_dots(self, stroke_color, hit_fill, rest_fill, transparent):
+        # Draw dots on top of the background ring to mark the rhythm.
+        # This uses alpha blending and stroke/fill colors to separate the dots
+        # from the background ring.
+        # - stroke_color: palette index of stroke color
+        # - hit_fill: palette index for hit dot fill color
+        # - hit_fill: palette index for rest dot fill color
+        # - transparent: palette index for transparent areas
+        self.fg.fill(transparent)
+        rhythm = self.rhythm
+        for i in range(len(rhythm)):
+            angle = math.radians(360 * i / len(rhythm))
+            x = round(self.cx + ((self.radius + 0.5) * math.cos(angle)))
+            y = round(self.cy + ((self.radius + 0.5) * math.sin(angle)))
+            if rhythm[i] == 'x':
+                thick_circle(self.fg, x, y, radius=10,
+                    value=stroke_color, stroke_px=3, fill=hit_fill)
+            else:
+                thick_circle(self.fg, x, y, radius=8,
+                    value=stroke_color, stroke_px=4, fill=rest_fill)
+
+
 def main():
 
     # Configure display with requested picodvi video mode
     display = init_display(320, 240, 16)
-    display.auto_refresh = False
     grp = Group(scale=1)
     display.root_group = grp
+
+    # Make background bitmap and palette (solid color and concentric rings)
+    bg_pal = Palette(2)
+    bg_pal[0] = CYANISH
+    bg_pal[1] = WHITE
+    bg = Bitmap(display.width, display.height, len(bg_pal))
+    bg_tg = TileGrid(bg, pixel_shader=bg_pal)
+    grp.append(bg_tg)
+
+    # Make foreground bitmap and palette (dots for beats)
+    fg_pal = Palette(4)
+    fg_pal[0] = BLACK   # this gets set to transparent below
+    fg_pal[1] = WHITE
+    fg_pal[2] = CYANISH
+    fg_pal[3] = GREEN
+    fg_pal.make_transparent(0)
+    fg = Bitmap(display.width, display.height, len(fg_pal))
+    fg_tg = TileGrid(fg, pixel_shader=fg_pal)
+    grp.append(fg_tg)
+
+    ring = RhythmRing(bg, fg, cx=110, cy=display.height//2, radius=65,
+        beats=8, hits=5, shift=0, bpm=80
+    )
+    ring.draw_ring(bg_color=0, stroke_color=1)
+    ring.draw_dots(stroke_color=2, hit_fill=3, rest_fill=1, transparent=0)
 
     # Set up the audio stuff for a basic synthesizer
     i2c = I2C()
@@ -174,7 +285,6 @@ def main():
     fast_wr = sys.stdout.write
     panic = synth.release_all
     press = synth.press
-    refresh = display.refresh
     release = synth.release
     sleep = time.sleep
     ticks_ms = supervisor.ticks_ms
@@ -185,7 +295,6 @@ def main():
     # This grabs the first MIDI device it finds. Reset board to re-scan bus.
     while True:
         fast_wr("USB Host: scanning bus...\n")
-        refresh()
         gc.collect()
         device_cache = {}
         try:
@@ -219,15 +328,13 @@ def main():
             if event_it is None:
                 continue
             cin = chan = num = val = 0x00
-            t1_dvi = t2 = ticks_ms()
+            t1 = t2 = ticks_ms()
             while True:
-                # Use elapsed time interval to limit display refresh rate and
-                # regulate sequencer event triggers
+                # Use elapsed time interval to regulate sequencer timing
                 t2 = ticks_ms()
-                if diff_ms(t1_dvi, t2) > 30:
-                    # Refresh the display
-                    t1_dvi = t2
-                    refresh()
+                if diff_ms(t1, t2) > 30:
+                    # TODO: implement this
+                    pass
 
                 # Poll for a USB MIDI event and begin handling midi packet. The
                 # packet (data) should be None or a 4-byte memoryview. The :=
